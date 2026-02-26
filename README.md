@@ -8,7 +8,7 @@
 
 *Finn Busch, Matti Vahs, Quantao Yang, Jesús Gerardo Ortega Peimbert, Yixi Cai, Jana Tumova, Olov Andersson*
 
-*KTH Royal Institute of Technology*
+*Division of Robotics, Perception, and Learning at KTH Royal Institute of Technology*
 
 </div>
 
@@ -39,7 +39,7 @@ git clone https://github.com/facebookresearch/dinov3.git
 
 **3. Download DINOv3 weights**
 
-Download the DINOv3 ViT-B/16 pretrain weights from Meta's official release and place the file in the project root. Then set the path:
+Request access to DINOv3 pretrained weights at [ai.meta.com/resources/models-and-libraries/dinov3-downloads](https://ai.meta.com/resources/models-and-libraries/dinov3-downloads/). Once approved, you will receive an email with download URLs. Download the ViT-B/16 pretrain weights (`dinov3_vitb16_pretrain.pth`) and set the path:
 
 ```bash
 export DINOV3_WEIGHTS=/path/to/dinov3_vitb16_pretrain.pth
