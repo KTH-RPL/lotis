@@ -1,0 +1,64 @@
+GENERAL:
+  OUTPUT_DIR: "./model_output/"
+  LOG_LEVEL: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR
+  USE_NESTED_TENSORS: true
+
+MODEL:
+  HIDDEN_DIM: 256
+  NUM_HEADS: 8
+  NUM_BLOCKS: 12
+  HEAD_DEPTH: 3
+  MAX_SEQ_LEN: 40
+  DROPOUT_RATE: 0.1
+  ATTENTION_DROPOUT_RATE: 0.1
+  DROPPATH_RATE: 0.1
+  ROPE_FREQ_SEQ: 100
+  ROPE_FREQ_SPAT: 500
+  PREDICTION_HEADS: [
+    "center",
+    # "mask",
+    "visibility",
+    # "progress"
+  ]
+  MINI_BATCH_SIZE: -1
+  LAYERNORM_TYPE: "RMSNorm"
+
+TRAINING:
+  MODE: "trajectory" # or "query"
+  TRAJ_MULTIPLIER: 8
+  MULTI_GPU: false
+  AUGMENT_ROTATION: false
+  AUGMENT_DINO: false
+  FRAME_MASK_PROB: 0.0
+  TEMPORAL_ROPE_JITTER: false
+  JITTER_RANGE: 2.0
+  EPOCHS: 40
+  VIS_FREQ: -1
+  BATCH_SIZE: 8
+  OPTIM:
+    OPTIMIZER: "muon"
+    LR_SCHEDULER: "warmupcosine"
+    LR: 5e-4
+    WEIGHT_DECAY: 0.05
+    GRADIENT_CLIP_NORM: 1.0
+  LOSS_WEIGHTS:
+    IOU: 1.0
+    BCE: 1.0
+    DICE: 0.0
+    VISIBILITY: 1.0
+    FOCAL: 1.0
+    CENTER_MSE: 10.0
+    DISTANCES_MSE: 6.0
+  #USE_CWD: true
+
+DATASET:
+  DATA_PATH: ["/media/data_0/dataset_progpre/", "/media/data_1/dataset_tg2/", "/media/data_1/coda_pre/", "/media/data_1/botanic_pre/", "/media/data_1/bonn_pre/"]
+  # DATA_PATH: ["/media/data_1/dataset_tg2/"]
+  DATASET_NAME: ['habitat', 'tartan', 'coda', 'botanic', 'bonn']
+  # DATASET_NAME: ['tartan']
+  REAL_DATA_PATH: "/media/data_0/dataset_gs/"
+  # DATA_PATH: "/scratch/local/ds_zipped/"
+  TYPE: "pre"
+  HAS_FEATS: true
+  IS_ZIPPED: true
+  NUM_WORKERS: 4 # 6

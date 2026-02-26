@@ -1,0 +1,1 @@
+Data from the SCAND dataset: H. Karnan et al., "Socially Compliant Navigation Dataset (SCAND): A Large-Scale Dataset of Demonstrations for Social Navigation," IEEE Robotics and Automation Letters, 2022.

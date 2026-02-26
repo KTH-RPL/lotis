@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lotis"
+version = "0.1.0"
+description = "Learning to Localize Reference Trajectories in Image-Space for Visual Navigation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Finn Busch", email = "flbusch@kth.se" },
+    { name = "Matti Vahs" },
+    { name = "Quantao Yang" },
+    { name = "Jesús Gerardo Ortega Peimbert" },
+    { name = "Yixi Cai" },
+    { name = "Jana Tumova" },
+    { name = "Olov Andersson" },
+]
+keywords = ["visual navigation", "trajectory localization", "computer vision", "deep learning", "robotics"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "numpy",
+    "Pillow",
+    "opencv-python",
+    "pyyaml",
+    "rerun-sdk>=0.20",
+    "gradio>=4.0.0",
+    "torchmetrics",
+    "termcolor",
+]
+
+[project.urls]
+Repository = "https://github.com/KTH-RPL/lotis"
+Paper = "https://arxiv.org/abs/2602.18803"
+"Project Page" = "https://finnbusch.com/lotis"
+"HuggingFace" = "https://huggingface.co/spaces/fnnBsch/lotis-demo"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lotis"]

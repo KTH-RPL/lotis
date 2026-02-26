@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info/
+.venv/
+
+# Model weights
+*.pth
+
+# DINOv3 cloned repo
+dinov3/
+
+# Caches and runtime artefacts
+model_cache/
+dataset_cache/
+.gradio/
+flagged/
