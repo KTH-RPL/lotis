@@ -150,10 +150,13 @@ encoding = TrajectoryEncoding.from_dict(torch.load("encoding.pt"))
 ## Citation
 
 ```bibtex
-@article{busch2026lotis,
-  title   = {Learning to Localize Reference Trajectories in Image-Space for Visual Navigation},
-  author  = {Busch, Finn and Vahs, Matti and Yang, Quantao and {Ortega Peimbert}, {Jes\'{u}s Gerardo} and Cai, Yixi and Tumova, Jana and Andersson, Olov},
-  journal = {arXiv preprint arXiv:2602.18803},
-  year    = {2026},
+@misc{busch2026learninglocalizereferencetrajectories,
+      title={Learning to Localize Reference Trajectories in Image-Space for Visual Navigation}, 
+      author={Finn Lukas Busch and Matti Vahs and Quantao Yang and Jesús Gerardo Ortega Peimbert and Yixi Cai and Jana Tumova and Olov Andersson},
+      year={2026},
+      eprint={2602.18803},
+      archivePrefix={arXiv},
+      primaryClass={cs.RO},
+      url={https://arxiv.org/abs/2602.18803}, 
 }
 ```
