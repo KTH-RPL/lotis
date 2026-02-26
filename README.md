@@ -12,7 +12,7 @@
 
 </div>
 
-LoTIS is a model for visual navigation that provides robot-agnostic image-space guidance by localizing a reference RGB trajectory in the robot's current view — without requiring camera calibration, poses, or robot-specific training. Given a reference trajectory (a sequence of RGB images) and a query image from the robot's current viewpoint, LoTIS predicts the 2D image-space coordinates, visibility, and relative distance of each trajectory pose as it would appear in the query view.
+LoTIS is a model for visual navigation that provides robot-agnostic image-space guidance by localizing a reference RGB trajectory in the robot's current view. Given a reference trajectory (a sequence of RGB images) and a query image from the robot's current viewpoint, LoTIS predicts the 2D image-space coordinates, visibility, and relative distance of each trajectory pose as it would appear in the query view.
 
 ## Setup
 
@@ -143,8 +143,7 @@ encoding = TrajectoryEncoding.from_dict(torch.load("encoding.pt"))
 
 ## Roadmap
 
-- [x] Inference code + Rerun visualization
-- [x] Gradio demo
+- [x] Inference code + Gradio Demo
 - [ ] Evaluation code
 - [ ] Training code
 
