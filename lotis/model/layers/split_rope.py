@@ -116,7 +116,6 @@ class SplitDimensionRoPE(nn.Module):
             q_spatial, q_temporal = None, q
             k_spatial, k_temporal = None, k
         else:
-            # TODO Chunk better. We should have 75% on the spatial and 25% on the temporal.
             spatial_size = feature_dim * 3 // 4
             temporal_size = feature_dim - spatial_size
             q_spatial, q_temporal = torch.split(q, (spatial_size, temporal_size), dim=-1)
@@ -226,7 +225,6 @@ class RotaryEmbeddingHalf(nn.Module):
         x1, x2 = x[..., :feature_dim//2], x[..., feature_dim//2:]
         return torch.cat((-x2, x1), dim=-1)
     
-    # TODO We should be able to handle this through broadcasting as in the temporal case, but this is more explicit.
     def _apply_1d_rope(self, tokens, positions, cos_comp, sin_comp):
         """Applies 1D rotary position embeddings along one dimension."""
         # Embed positions with frequency components
@@ -484,15 +482,7 @@ class TemporalEmbeddingHalf(nn.Module):
                 else:
                     # In this case we need batched positions. This is slightly redundant but should be fine overall.
                     # offsets = x._offsets
-                    # lengths = torch.diff(offsets)
-                    # positions = torch.arange(lengths.sum(), device=x.device) - torch.repeat_interleave(offsets[:-1], lengths)
-                    # TODO lengths.sum() requires synchronization, can we avoid this?
-                    # This could be a workaround:
-                    vals = x.values() # (should be cheap)
-                    # We now know the length is the first dimension of vals
-                    # assert vals.shape[0] == lengths.sum(), f"Length mismatch in nested tensor values, expected {lengths.sum()} but got {vals.shape[0]}"
-                    # Also, we should provide the output size to repeat_interleave to avoid gpu-cpu sync.
-                    # TODO Also make sure that this is correct? Seems very weird :)
+                    vals = x.values()
                     positions = torch.arange(vals.shape[0], device=x.device) - torch.repeat_interleave(x._offsets[:-1], torch.diff(x._offsets), output_size=vals.shape[0])
 
                     cos_comp, sin_comp = self._compute_frequency_components(

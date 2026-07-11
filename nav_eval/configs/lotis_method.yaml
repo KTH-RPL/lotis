@@ -1,0 +1,10 @@
+checkpoint_path: final_model.pth
+config_path: final_config.yaml
+device: cuda
+dinov3_weights: null
+dinov3_repo: ./dinov3
+visibility_threshold: 0.5
+forward_velocity: 0.4
+turn_gain: 2.0
+use_geodesic_follower: true
+geodesic_forward_distance: 1.0

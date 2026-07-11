@@ -1,5 +1,5 @@
 """Model components for LoTIS."""
 
-from .model import TrajectoryLocalizationModel
+from .model import LoTIS
 
-__all__ = ["TrajectoryLocalizationModel"]
+__all__ = ["LoTIS"]

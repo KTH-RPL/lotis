@@ -224,12 +224,12 @@ class TrajectoryLocalizer:
         Returns:
             Initialized TrajectoryLocalizer ready for use.
         """
-        from .model import TrajectoryLocalizationModel
+        from .model import LoTIS
         from .config import load_config
 
         cfg = load_config(config_path)
 
-        model = TrajectoryLocalizationModel(
+        model = LoTIS(
             feature_dim=768,
             input_patches=(14, 14),
             hidden_dim=cfg.hidden_dim,
@@ -240,7 +240,6 @@ class TrajectoryLocalizer:
             attention_dropout=0.0,
             droppath=0.0,
             max_seq_len=cfg.max_seq_len,
-            output_size=(32, 32),
             full_global_attention=True,
             rope_freq_seq=cfg.rope_freq_seq,
             rope_freq_spat=cfg.rope_freq_spat,

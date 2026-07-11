@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lotis"
-version = "0.1.0"
+version = "0.2.0"
 description = "Learning to Localize Reference Trajectories in Image-Space for Visual Navigation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,10 +33,11 @@ dependencies = [
     "Pillow",
     "opencv-python",
     "pyyaml",
-    "rerun-sdk>=0.20",
+    "rerun-sdk>=0.33",
     "gradio>=4.0.0",
     "torchmetrics",
     "termcolor",
+    "rich",
 ]
 
 [project.urls]
@@ -46,4 +47,4 @@ Paper = "https://arxiv.org/abs/2602.18803"
 "HuggingFace" = "https://huggingface.co/spaces/fnnBsch/lotis-demo"
 
 [tool.hatch.build.targets.wheel]
-packages = ["lotis"]
+packages = ["lotis", "nav_eval"]

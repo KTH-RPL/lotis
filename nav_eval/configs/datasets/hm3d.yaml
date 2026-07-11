@@ -1,0 +1,37 @@
+simulator:
+  width: 512
+  height: 512
+  camera_fov: [80, 140]
+  sensor_height: [0.4, 1.7]
+  enable_physics: false
+  control_hz: 10.0
+  max_linear_velocity: 0.5
+  max_angular_velocity: 1.2
+  random_seed: 42
+  scene_datasets:
+    - name: HM3D Train
+      data_path: /home/finn/MON/datasets/scene_datasets/data  # TODO: point at your Habitat scene_datasets root
+      scene_dataset_config: versioned_data/hm3d-0.2/hm3d/train/hm3d_basis.scene_dataset_config.json
+      scenes_directory: versioned_data/hm3d-0.2/hm3d/train/
+      scene_pattern: "*/*.basis.glb"
+      needs_lighting: false
+
+evaluation:
+  dataset_path: /home/finn/lotis-eval/hm3d  # TODO: <download-dir>/hm3d (from HF fnnBsch/lotis-eval)
+  log_dir: eval_results/hm3d
+  scenes_to_eval: null
+  max_trajectories_per_scene: null
+  max_episodes: null
+  max_queries_per_trajectory: 2
+  use_augmented: false
+  query_type: off_traj
+  tracking_mode: forward
+  max_steps: 1000
+  success_distance_threshold: 0.5
+  change_height: true
+  change_camera: true
+  save_trajectories: true
+
+method:
+  name: lotis
+  config_path: nav_eval/configs/lotis_method.yaml

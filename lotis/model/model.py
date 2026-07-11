@@ -1,25 +1,10 @@
-from functools import partial
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import functools
-import math
-import torch
-import torch.nn as nn
-import math
-
-import torch
-import torch.nn as nn
-import math
-import torch
-import torch.nn as nn
-import math
-from torch.utils.checkpoint import CheckpointPolicy
-from torch.utils.checkpoint import checkpoint, create_selective_checkpoint_contexts
 import torch.cuda.nvtx as nvtx
 
-from ..utils.position_encoding import PositionalEncoding, RotaryPositionEmbedding, SequencePositionalEncoding, PositionGetter
-# from .layers.block import Block
+from ..utils.position_encoding import PositionGetter
 from .layers.split_rope import SplitDimensionRoPE
 from .layers.dual_att_enc import DualAttentionEncoderBlock, MultiHeadAttention
 from .layers.layer_scale import LayerScale
@@ -27,8 +12,7 @@ from .layers.njt_utils.nested_metadata import NestedTensorMetadata
 from .layers.njt_utils.slice_njt import slice_njt
 from .layers.njt_utils.repeat_interleave_njt import repeat_nested_tensor_efficient
 
-from .camera_head import CameraHead
-from .progress_head import ProgressHead
+from .prediction_head import LoTISPredictionHead
 from .layers.drop_path import DropPath
 from torch.utils.checkpoint import checkpoint
 import os
@@ -61,72 +45,7 @@ def slice_expand_and_flatten(token_tensor, B, BS):
     others = token_tensor[0, 1:, ...].expand(BS, *token_tensor.shape[2:])
     return query, others
 
-class MLPDecoder(nn.Module):
-    def __init__(self, 
-                 input_channels,   # Input channel dimension C from transformer
-                 spatial_size,     # (h, w) spatial dimensions of the input tokens
-                 output_size,      # (H, W) target mask dimensions
-                 mlp_hidden_dim=256, 
-                 num_layers=3):
-        super().__init__()
-        h, w = spatial_size
-        self.token_count = h * w
-        self.output_size = output_size
-        
-        # Optional: learnable positional embeddings
-        # self.pos_embed = nn.Parameter(torch.zeros(1, self.token_count, input_channels))
-        
-        # Create a list of MLP layers. We use LayerNorm (which is independent of batch size) before each projection.
-        mlp_layers = []
-        in_dim = input_channels
-        for _ in range(num_layers):
-            mlp_layers.append(ln_t(in_dim))
-            mlp_layers.append(nn.Linear(in_dim, mlp_hidden_dim))
-            mlp_layers.append(nn.GELU())
-            in_dim = mlp_hidden_dim
-        self.mlp = nn.Sequential(*mlp_layers)
-        
-        # Final linear projection to output a single mask logit per token
-        self.proj = nn.Linear(in_dim, 1)
-        
-    def forward(self, x):
-        # x: [B*S, C, h, w]
-        B_S, C, h, w = x.shape
-        # Flatten spatial dimensions: [B*S, C, h*w] -> [B*S, h*w, C]
-        x = x.flatten(2).transpose(1, 2)  # [B*S, h*w, C]
-        
-        # Add positional embeddings
-        # x = x + self.pos_embed
-        
-        # Process tokens with MLP layers
-        x = self.mlp(x)  # [B*S, h*w, mlp_hidden_dim]
-        
-        # Project to single-channel output per token
-        x = self.proj(x)  # [B*S, h*w, 1]
-        
-        # Reshape to [B*S, 1, h, w]
-        x = x.transpose(1, 2).view(B_S, 1, h, w)
-        
-        # Upsample to desired output size (e.g., [H, W])
-        x = F.interpolate(x, size=self.output_size, mode='bilinear', align_corners=False)
-        return x
-    
-class ManualLayerNorm(nn.Module):
-    def __init__(self, normalized_shape, elementwise_affine=False, eps=1e-6, dtype=None):
-        # Note we dont use elementwise_affine here for simplicity
-        super().__init__()
-        self.normalized_shape = normalized_shape
-        self.eps = eps
-        # self.weight = nn.Parameter(torch.ones(normalized_shape))
-        # self.bias = nn.Parameter(torch.zeros(normalized_shape))
-
-    def forward(self, x: torch.Tensor):
-        mean = torch.mean(x, dim=-1, keepdim=True)
-        variance = torch.mean((x - mean) ** 2, dim=-1, keepdim=True)
-        x_normalized = (x - mean) / torch.sqrt(variance + self.eps)
-        return x_normalized
-    
-class TrajectoryLocalizationModel(nn.Module):
+class LoTIS(nn.Module):
     """
     Improved trajectory localization model with proper handling of position encodings.
     Uses the custom DualAttentionEncoderBlock and SplitDimensionRoPE.
@@ -141,11 +60,10 @@ class TrajectoryLocalizationModel(nn.Module):
                  max_seq_len=40,
                  num_blocks=3,
                  head_depth=4,
-                 output_size=(56, 56),
                  use_nested_tensor=False,
                  rope_freq_seq=100,
                  rope_freq_spat=500,
-                 heads=["mask", "visibility", "center"],
+                 heads=["center"],
                  full_global_attention=True,
                  mini_batch_size = 8,
                  rope_jitter=False,
@@ -160,8 +78,6 @@ class TrajectoryLocalizationModel(nn.Module):
             raise ValueError(f"Invalid layernorm_type: {layernorm_type}. Must be 'LayerNorm' or 'RMSNorm'.")
         
         ln_t = nn.LayerNorm if layernorm_type == "LayerNorm" else nn.RMSNorm
-        # ln_t = ManualLayerNorm
-        # ln_t = nn.Identity
         self.P = 197
         self.num_decoder_blocks = num_blocks // 2
         self.full_global_attention = full_global_attention
@@ -169,10 +85,14 @@ class TrajectoryLocalizationModel(nn.Module):
         self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
         self.input_patches = input_patches
-        self.output_size = output_size
         self.num_heads = num_heads
         self.use_nested_tensor = use_nested_tensor
-        self.head_types = heads
+        self.head_types = list(heads)
+        if "center" not in self.head_types:
+            raise ValueError("LoTIS release model requires the 'center' prediction head.")
+        unsupported_heads = set(self.head_types) - {"center", "visibility", "distances"}
+        if unsupported_heads:
+            raise ValueError(f"Unsupported prediction heads: {sorted(unsupported_heads)}")
         self.rope_freq_seq = rope_freq_seq
         self.rope_freq_spat = rope_freq_spat
         self.droppath = droppath
@@ -322,23 +242,7 @@ class TrajectoryLocalizationModel(nn.Module):
             for i in range(self.num_decoder_blocks)
         ])
 
-        self.mask_decoder = MLPDecoder(
-            input_channels=hidden_dim,
-            spatial_size=(input_patches[0], input_patches[1]),
-            output_size=output_size,
-            mlp_hidden_dim=256,
-            num_layers=3
-        ) if "mask" in self.head_types else None
-
-        # Included in the camera head for now
-        self.visibility_decoder = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim//2, 1)
-        ) if "visibility" in self.head_types and False else None
-        
-        self.center_decoder = CameraHead(
+        self.center_decoder = LoTISPredictionHead(
             dim_in = hidden_dim,
             trunk_depth=head_depth,
             num_heads= num_heads,
@@ -350,19 +254,7 @@ class TrajectoryLocalizationModel(nn.Module):
             compile=compile,  
             predict_visibility=True,
             layernorm=ln_t,
-        ) if "center" in self.head_types else None
-
-        self.progress_decoder = ProgressHead(
-            dim_in = hidden_dim,
-            trunk_depth=head_depth,
-            num_heads= num_heads,
-            mlp_ratio=3,
-            dropout=dropout,
-            attention_dropout=attention_dropout,
-            droppath=droppath,
-            use_nested_tensor=False,    
-            compile=compile,
-        ) if "progress" in self.head_types else None
+        )
 
         self._block_fwd = torch.compile(
             self._block_fwd_impl,
@@ -495,7 +387,6 @@ class TrajectoryLocalizationModel(nn.Module):
             )
 
         # Hoist k/v nested tensor creation outside loop - query_camera_feats doesn't change
-        # Disabled for now, this seemed to have changed things..
         # if self.use_nested_tensor:
         #     k_cached = torch.nested.nested_tensor_from_jagged(query_camera_feats.view(B*P, C),
         #                                             offsets_p_single,
@@ -793,173 +684,23 @@ class TrajectoryLocalizationModel(nn.Module):
         # HEAD DECODING (common to both paths)
         # ============================================================================
         nvtx.range_push("decode_heads") if not ONNX_EXPORT else None
-        return_dict = {}
-        
-        if self.mask_decoder is not None:
-            h, w = self.input_patches[0], self.input_patches[1]
-            assert P-1 == h*w, f"Expected {h*w} patches but got {P-1}"
-            traj_queries = cross_attn_features[:, :, 1:, :].permute(0, 1, 3, 2).view(B*cross_attn_features.shape[1], C, h, w)
-            
-            mask_logits = self.mask_decoder(traj_queries).view(B, cross_attn_features.shape[1], self.output_size[0], 
-                                                            self.output_size[1])
-            mask_probs = torch.sigmoid(mask_logits)
-            return_dict['mask'] = {}
-            return_dict['mask']['logits'] = mask_logits
-            return_dict['mask']['probs'] = mask_probs
-        
-        if self.visibility_decoder is not None:
-            visibility_logits = self.visibility_decoder(cross_attn_features)
-            visibility_logits = visibility_logits.view(B, cross_attn_features.shape[1], 1)
-            return_dict['visibility'] = {}
-            return_dict['visibility']['logits'] = visibility_logits
-        
-        if self.center_decoder is not None:
-            camera_feats_in = pre_head_camera_features_nested if self.use_nested_tensor else pre_head_camera_features
-            center_coords, predicted_vis, predicted_dists = self.center_decoder(camera_feats_in, mask=seq_mask_, nested_metadata=full_nested_metadata) 
-            return_dict['center'] = {}
-            return_dict['center']['coords'] = center_coords if self.training else center_coords[-1]
-            return_dict['visibility'] = {}
-            return_dict['visibility']['logits'] = predicted_vis if self.training else predicted_vis[-1]
-            return_dict['distances'] = {}
-            return_dict['distances']['values'] = predicted_dists if self.training else predicted_dists[-1]
-        
-        if self.progress_decoder is not None:
-            progress = self.progress_decoder(pre_head_camera_features, query_features[:, 0, :].unsqueeze(1), mask=seq_mask_)
-            progress = progress if True else progress[-1].view(full_batch_size, 2)
-            return_dict['progress'] = {}            
-            return_dict['progress']['values'] = progress
+        camera_feats_in = pre_head_camera_features_nested if self.use_nested_tensor else pre_head_camera_features
+        center_coords, predicted_vis, predicted_dists = self.center_decoder(
+            camera_feats_in,
+            mask=seq_mask_,
+            nested_metadata=full_nested_metadata,
+        )
+        return_dict = {
+            "center": {"coords": center_coords if self.training else center_coords[-1]},
+            "visibility": {"logits": predicted_vis if self.training else predicted_vis[-1]},
+            "distances": {"values": predicted_dists if self.training else predicted_dists[-1]},
+        }
         
         nvtx.range_pop() if not ONNX_EXPORT else None
         return return_dict
 
     def decode(self, x, seq_lens_sum, seq_mask=None, compute_variance=False, nested_metadata=None):
-        raise NotImplementedError("Use decode_traj_mode for trajectory mode decoding for now. This decode function misses crucial parts: 1. Spatial RoPE. 2. Interleaved cross-query-attention")
-        """Decode features into masks."""
-        trajectory_features, query_features = x
-        if nested_metadata is None:
-            nested_metadata = NestedTensorMetadata.from_tensor(trajectory_features, self.P)
-        
-        min_seq_len = nested_metadata.min_seq_len
-        max_seq_len = nested_metadata.max_seq_len
-
-        if compute_variance:
-            self.compute_seq_variance(trajectory_features, "trajectory features before decode")
-        
-        B, S, P, C = trajectory_features.shape
-
-        query_camera_feats = query_features[:, :, :, :].squeeze(1) 
-        if self.use_nested_tensor:
-            og_offsets = nested_metadata.offsets
-            patched_offsets = nested_metadata.patched_offsets
-
-            min_patched_seq_len = nested_metadata.min_seq_len_patched
-            max_patched_seq_len = nested_metadata.max_seq_len_patched
-            trajectory_camera_feats = torch.nested.nested_tensor_from_jagged(
-                torch._nested_get_values(trajectory_features).view(seq_lens_sum * P, C), 
-                patched_offsets,
-                min_seqlen = min_patched_seq_len,
-                max_seqlen = max_patched_seq_len,
-                )
-        else:
-            trajectory_camera_feats = trajectory_features.reshape(B, S * P, C) 
-            
-        # Apply cross-attention: trajectory features attend to query features
-        cross_attn_features = trajectory_camera_feats  # initialize with trajectory features
-        query_camera_feats = self.query_layer_norm(query_camera_feats)
-        if not self.use_nested_tensor:       
-            expanded_mask = seq_mask.unsqueeze(-1).expand(B, S, P).reshape(B, S*P)
-            global_mask = ~expanded_mask.bool()  # True means positions to mask
-            
-        for i, (block, ffn) in enumerate(zip(self.cross_attention_blocks, self.cross_att_ffn)):
-            # TODO: Do we need ROPE here? We have already applied it in the encoder blocks.
-            cross_attn_features_norm = ffn[0](cross_attn_features)  # First Layer norm
-            q = cross_attn_features_norm
-            k = query_camera_feats
-            v = query_camera_feats
-            # TODO Add iteration if we are in "trajectory" mode where we have trajectories << queries
-            # Would need to then initially allocate one tensor for all the outputs, and iteratively relate a query to the corresponding trajectory
-            if self.use_nested_tensor:
-                k = torch.nested.nested_tensor_from_jagged(k.view(B*P, C),
-                                                           torch.arange(k.shape[0]+1, device=k.device)*P,
-                                                           min_seqlen=P,
-                                                           max_seqlen=P, 
-                                                           )
-                v = torch.nested.nested_tensor_from_jagged(v.view(B*P, C),
-                                                           torch.arange(v.shape[0]+1,device=v.device)*P,
-                                                           min_seqlen=P,
-                                                           max_seqlen=P,
-                                                           )
-                attn_output = block(query=q, key=k, value=v, min_seq_len_q=min_patched_seq_len, max_seq_len_q=max_patched_seq_len,
-                                    min_seq_len_k=P, max_seq_len_k=P)
-            else:
-                attn_output = block(query=q, key=k, value=v, attn_mask=global_mask)
-            attn_output = self.att_ls[i](attn_output)
-
-            
-            if self.training:
-                attn_w_residual = cross_attn_features + self.drop_path(attn_output)
-                attn_w_residual_norm = ffn[2](attn_w_residual)  # Second Layer norm
-                forward_out = ffn[1](attn_w_residual_norm)  # Forward
-                forward_out = self.ffn_ls[i](forward_out)
-                cross_attn_features = attn_w_residual + self.drop_path(forward_out)
-            else:
-                attn_w_residual = cross_attn_features + attn_output
-                attn_w_residual_norm = ffn[2](attn_w_residual)
-                forward_out = ffn[1](attn_w_residual_norm)  # Forward
-                forward_out = self.ffn_ls[i](forward_out)
-                cross_attn_features = attn_w_residual + forward_out
-
-            if compute_variance:
-                self.compute_seq_variance(cross_attn_features, f"after cross-attention block {i}")
-
-        # Extract camera token for heads.
-        if self.use_nested_tensor:
-            cross_attn_features = torch.nested.nested_tensor_from_jagged(torch._nested_get_values(cross_attn_features).view(seq_lens_sum, P, C)[:, 0, :],
-                                                                         og_offsets,
-                                                                            min_seqlen=min_seq_len,
-                                                                            max_seqlen=max_seq_len,
-                                                                            )  
-            # print(cross_attn_features.shape)
-            cross_attn_features_nested = cross_attn_features
-            # TODO can we avoid this get_max_seqlen call?
-            cross_attn_features = cross_attn_features.to_padded_tensor(0, (B, cross_attn_features._get_max_seqlen(), 1, C)) if self.use_nested_tensor else cross_attn_features
-
-        else:
-            cross_attn_features = cross_attn_features.view(B, S, P, C)[:, :, 0, :]  # [B, S, C]
-
-        return_dict = {}
-        if self.mask_decoder is not None:
-            h, w = self.input_patches[0], self.input_patches[1]
-            assert P-1 == h*w, f"Expected {h*w} patches but got {P-1}"
-            traj_queries = cross_attn_features[:, :, 1:, :].permute(0, 1, 3, 2).view(B*cross_attn_features.shape[1], C, h, w)  # [B*S, C, H, W] - Channel-first for Conv2d
-            
-            # Generate masks with simplified decoder
-            mask_logits = self.mask_decoder(traj_queries).view(B, cross_attn_features.shape[1], self.output_size[0], 
-                                                            self.output_size[1])
-            mask_probs = torch.sigmoid(mask_logits)
-            return_dict['mask'] = {}
-            return_dict['mask']['logits'] = mask_logits
-            return_dict['mask']['probs'] = mask_probs
-        if self.visibility_decoder is not None:
-            # TODO disabled for now
-            visibility_logits = self.visibility_decoder(cross_attn_features)
-            visibility_logits = visibility_logits.view(B, cross_attn_features.shape[1], 1)
-            return_dict['visibility'] = {}
-            return_dict['visibility']['logits'] = visibility_logits
-        if self.center_decoder is not None:
-            center_coords, predicted_vis = self.center_decoder(cross_attn_features_nested, mask=seq_mask, nested_metadata=nested_metadata) 
-            return_dict['center'] = {}
-            return_dict['center']['coords'] = center_coords if self.training else center_coords[-1]
-            return_dict['visibility'] = {}
-            return_dict['visibility']['logits'] = predicted_vis if self.training else predicted_vis[-1]
-        if self.progress_decoder is not None:
-            # print(f"Query camera features shape: {query_camera_feats.shape}")
-            progress = self.progress_decoder(cross_attn_features, query_camera_feats[:, 0, :].unsqueeze(1), mask=seq_mask)
-            progress = progress if self.training else progress[-1].view(B, 2)
-            return_dict['progress'] = {}            
-            return_dict['progress']['values'] = progress
-        # Return masks and dummy visibility scores
-        return return_dict
+        raise NotImplementedError("Use decode_traj_mode for trajectory-mode inference.")
     
     def compute_seq_variance(self, x, name="", detailed=False):
         """Compute variance across sequence dimension."""
@@ -1108,8 +849,6 @@ class TrajectoryLocalizationModel(nn.Module):
             for i, block in enumerate(self.encoder_blocks):
                 if compute_variance:
                     print(f"\n--- Processing block {i} ---")
-                # TODO: This also applies AC -> (wraps) torch.compile, might be an issue..
-                # TODO: Add selective here..
                 trajectory_features = checkpoint(
                     block,
                     trajectory_features,
@@ -1240,9 +979,7 @@ class TrajectoryLocalizationModel(nn.Module):
             nvtx.range_pop() if not ONNX_EXPORT else None
 
         # Encode query features
-        import time as _time
         nvtx.range_push("encode_query") if not ONNX_EXPORT else None
-        _t0 = _time.time()
         query_features = self.encode_query(
             query_features,
             seq_lens,
@@ -1250,9 +987,6 @@ class TrajectoryLocalizationModel(nn.Module):
             num_future_masks=num_future_masks,
             compute_variance=compute_variance
         )
-        if not ONNX_EXPORT and str(query_features.device).startswith("cuda"):
-            torch.cuda.synchronize()
-        print(f"[model]      encode_query: {_time.time() - _t0:.3f}s")
         nvtx.range_pop() if not ONNX_EXPORT else None
 
         # Handle query replication for batched trajectories in non-nested tensor mode
@@ -1269,16 +1003,12 @@ class TrajectoryLocalizationModel(nn.Module):
         # trajectory_features = trajectory_features.to_padded_tensor() if self.use_nested_tensor else trajectory_features
         if traj_query_counts is not None:
             nvtx.range_push("decode_traj_mode") if not ONNX_EXPORT else None
-            _t0 = _time.time()
             # We are in trajectory mode, so we need to decode with the trajectory mode decoder
             ret =  self.decode_traj_mode(
                 (trajectory_features, query_features),
                 seq_lens=new_seqlens,
                 seq_mask_=seq_mask_expanded,
             )
-            if not ONNX_EXPORT and str(trajectory_features.device).startswith("cuda"):
-                torch.cuda.synchronize()
-            print(f"[model]      decode_traj_mode: {_time.time() - _t0:.3f}s")
             nvtx.range_pop() if not ONNX_EXPORT else None
             nvtx.range_pop() if not ONNX_EXPORT else None
             return ret

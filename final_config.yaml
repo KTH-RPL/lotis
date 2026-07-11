@@ -14,12 +14,7 @@ MODEL:
   DROPPATH_RATE: 0.1
   ROPE_FREQ_SEQ: 100
   ROPE_FREQ_SPAT: 500
-  PREDICTION_HEADS: [
-    "center",
-    # "mask",
-    "visibility",
-    # "progress"
-  ]
+  PREDICTION_HEADS: ["center"]
   MINI_BATCH_SIZE: -1
   LAYERNORM_TYPE: "RMSNorm"
 

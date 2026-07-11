@@ -8,7 +8,7 @@ import yaml
 
 @dataclass
 class ModelConfig:
-    """Configuration for the TrajectoryLocalizationModel."""
+    """Configuration for the LoTIS model."""
 
     hidden_dim: int = 512
     num_heads: int = 8
@@ -17,9 +17,7 @@ class ModelConfig:
     max_seq_len: int = 40
     rope_freq_seq: int = 100
     rope_freq_spat: int = 500
-    prediction_heads: List[str] = field(
-        default_factory=lambda: ["center", "visibility", "distances"]
-    )
+    prediction_heads: List[str] = field(default_factory=lambda: ["center"])
     mini_batch_size: int = 8
     layernorm_type: str = "LayerNorm"
 
@@ -55,9 +53,7 @@ def load_config(config_path: Union[str, Path]) -> ModelConfig:
         max_seq_len=model_cfg.get("MAX_SEQ_LEN", 40),
         rope_freq_seq=model_cfg.get("ROPE_FREQ_SEQ", 100),
         rope_freq_spat=model_cfg.get("ROPE_FREQ_SPAT", 500),
-        prediction_heads=model_cfg.get(
-            "PREDICTION_HEADS", ["center", "visibility", "distances"]
-        ),
+        prediction_heads=model_cfg.get("PREDICTION_HEADS", ["center"]),
         mini_batch_size=model_cfg.get("MINI_BATCH_SIZE", 8),
         layernorm_type=model_cfg.get("LAYERNORM_TYPE", "LayerNorm"),
     )

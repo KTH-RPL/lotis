@@ -15,3 +15,7 @@ model_cache/
 dataset_cache/
 .gradio/
 flagged/
+eval_results/
+
+# Internal dataset-prep tooling — not for public release
+nav_eval/trim_dataset.py

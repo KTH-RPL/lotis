@@ -163,7 +163,6 @@ class MultiHeadAttention(nn.Module):
         # (N, L_s, E_total) -> (N, L_s, nheads, E_head) -> (N, nheads, L_s, E_head)
         value = value.unflatten(-1, [self.nheads, self.E_head])
 
-        # NOTE We moved the transpose to after the normalization step to make handling the nested tensors easier
         # Apply QK norm optionally
         if self.use_qk_norm:
             # Normalize along the head dimension
@@ -213,7 +212,7 @@ class MultiHeadAttention(nn.Module):
             # print(query.shape, key.shape, value.shape)
         attn_output = F.scaled_dot_product_attention(
             query, key, value, dropout_p=self.dropout if self.training else 0.0, is_causal=is_causal,
-            attn_mask=~attn_mask if attn_mask is not None else None # TODO Dirty hack, we have them mixed up here. They are all negative but should be positive xd
+            attn_mask=~attn_mask if attn_mask is not None else None
         )
         # (N, nheads, L_t, E_head) -> (N, L_t, nheads, E_head) -> (N, L_t, E_total)
         attn_output = attn_output.transpose(1, 2).flatten(-2)

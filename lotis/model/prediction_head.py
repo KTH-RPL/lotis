@@ -3,15 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.cuda.nvtx as nvtx
 
-from .layers.dual_att_enc import DualAttentionEncoderBlock, MultiHeadAttention
+from .layers.dual_att_enc import MultiHeadAttention
 from .layers.layer_scale import LayerScale
 from .layers.drop_path import DropPath
 from .layers.njt_utils.nested_metadata import NestedTensorMetadata
 # torch._dynamo.config.capture_scalar_outputs = True
 
-class CameraHead(nn.Module):
+class LoTISPredictionHead(nn.Module):
     """
-    CameraHead predicts camera parameters from token representations using iterative refinement.
+    LoTISPredictionHead predicts trajectory-relative query coordinates from token representations.
 
     It applies a series of transformer blocks (the "trunk") to dedicated camera tokens.
     """
@@ -104,7 +104,6 @@ class CameraHead(nn.Module):
             nn.Linear(dim_in // 2, self.target_dim),
         )
         self.droppath = DropPath(droppath) if droppath > 0. else nn.Identity()
-        # TODO Change RMSNorm to LayerNorm if problems arise.Actually, might be wrong :)
         self.trunk_fn = torch.compile(
             self._trunk_fn,
             dynamic=True,
@@ -261,219 +260,3 @@ def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch
     """
     # modified from https://github.com/facebookresearch/DiT/blob/796c29e532f47bba17c5b9c5eb39b9354b8b7c64/models.py#L19
     return x * (1 + scale) + shift
-
-
-def main():
-    """
-    Debug function to compare gradients with and without torch.compile.
-    Tests gradient stability with AMP bfloat16.
-    """
-    import numpy as np
-
-    def set_seed(seed=42):
-        """Set seed for reproducibility."""
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        np.random.seed(seed)
-
-    def get_model_gradients(model):
-        """Extract all gradients from a model."""
-        grads = {}
-        for name, param in model.named_parameters():
-            if "empty_pose_tokens" in name:
-                print(param.grad[0,0].item() if param.grad is not None else None)
-            if param.grad is not None:
-                grads[name] = param.grad.clone().cpu()
-        return grads
-
-    def compare_gradients(grads1, grads2, rtol=1e-3, atol=1e-5):
-        """Compare two gradient dictionaries."""
-        print("\n" + "="*80)
-        print("GRADIENT COMPARISON")
-        print("="*80)
-
-        all_close = True
-        for name in grads1.keys():
-            if name not in grads2:
-                print(f"❌ {name}: Missing in second run")
-                all_close = False
-                continue
-
-            g1 = grads1[name]
-            g2 = grads2[name]
-
-            # Compute various metrics
-            max_diff = torch.abs(g1 - g2).max().item()
-            mean_diff = torch.abs(g1 - g2).mean().item()
-            rel_diff = (torch.abs(g1 - g2) / (torch.abs(g1) + 1e-8)).mean().item()
-
-            is_close = torch.allclose(g1, g2, rtol=rtol, atol=atol)
-
-            status = "✓" if is_close else "✗"
-            print(f"{status} {name:50s} | max_diff: {max_diff:.6e} | mean_diff: {mean_diff:.6e} | rel_diff: {rel_diff:.6f}")
-
-            if not is_close:
-                all_close = False
-
-        print("="*80)
-        if all_close:
-            print("✓ All gradients match within tolerance!")
-        else:
-            print("✗ Some gradients differ beyond tolerance!")
-        print("="*80 + "\n")
-
-        return all_close
-
-    # Test parameters
-    batch_size = 40
-    seq_len = 40
-    dim = 256
-    num_heads = 8
-    trunk_depth = 3
-    n_iter = 10
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    print(f"Device: {device}")
-    print(f"Testing with batch_size={batch_size}, seq_len={seq_len}, dim={dim}\n")
-
-    # ========================================================================
-    # Test 1: WITH torch.compile on trunk_fn
-    # ========================================================================
-    print("="*80)
-    print("TEST 1: WITH torch.compile (disable=False)")
-    print("="*80)
-
-    set_seed(309)
-
-    # Create model with compile enabled and nested tensors
-    model_compiled = CameraHead(
-        dim_in=dim,
-        trunk_depth=trunk_depth,
-        num_heads=num_heads,
-        predict_visibility=True,
-        compile=True,
-        layernorm=nn.RMSNorm,
-        use_nested_tensor=True,  # Enable nested tensors
-    ).to(device)
-
-    # Create dummy input - nested tensor format
-    set_seed(309)
-    # For nested tensors, we need varying sequence lengths
-    seq_lens = torch.tensor([seq_len, seq_len], device=device)  # Same length for simplicity
-    total_seq_len = seq_lens.sum().item()
-
-    # Create flat tensor for nested tensor
-    tokens_flat = torch.randn(total_seq_len, dim, dtype=torch.bfloat16, device=device, requires_grad=True)
-
-    # Create nested metadata
-    from layers.njt_utils.nested_metadata import NestedTensorMetadata
-    offsets = torch.cat([torch.tensor([0], device=device), seq_lens.cumsum(0)])
-
-    # Convert to nested tensor
-    tokens = torch.nested.nested_tensor_from_jagged(
-        tokens_flat,
-        offsets=offsets,
-        min_seqlen=seq_len,
-        max_seqlen=seq_len
-    )
-    nested_metadata = NestedTensorMetadata.from_tensor(tokens, 1)
-
-    mask = None  # No mask for simplicity
-
-    # Forward pass with autocast
-    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-        outputs = model_compiled(tokens, mask, num_iterations=n_iter, nested_metadata=nested_metadata)
-
-    # Sum one of the outputs for gradient computation
-    if isinstance(outputs, tuple):
-        # predict_visibility=True returns (coords_list, vis_list, dists_list)
-        loss = outputs[0][0].sum()
-        for i in range(1, n_iter):
-            loss = loss + outputs[0][i].sum()
-    else:
-        loss = outputs[0].sum()
-        for i in range(1, n_iter):
-            loss = loss + outputs[i].sum()
-    # print(outputs)
-    print(f"Loss (compiled): {loss.item():.6f}")
-
-    # Backward pass
-    loss.backward()
-
-    # Extract gradients
-    grads_compiled = get_model_gradients(model_compiled)
-
-    print(f"Number of parameters with gradients: {len(grads_compiled)}")
-
-    # ========================================================================
-    # Test 2: WITHOUT torch.compile on trunk_fn
-    # ========================================================================
-    print("\n" + "="*80)
-    print("TEST 2: WITHOUT torch.compile (disable=True)")
-    print("="*80)
-
-    set_seed(309)
-
-    # Create model without compile, but with nested tensors
-    model_uncompiled = CameraHead(
-        dim_in=dim,
-        trunk_depth=trunk_depth,
-        num_heads=num_heads,
-        predict_visibility=True,
-        compile=False,
-        layernorm=nn.RMSNorm,
-        use_nested_tensor=True,  # Enable nested tensors
-    ).to(device)
-
-    # Create same dummy input
-    set_seed(309)
-    tokens_flat_unc = torch.randn(total_seq_len, dim, dtype=torch.bfloat16, device=device, requires_grad=True)
-
-    # Convert to nested tensor (same structure as before)
-    tokens_unc = torch.nested.nested_tensor_from_jagged(
-        tokens_flat_unc,
-        offsets=offsets,
-        min_seqlen=seq_len,
-        max_seqlen=seq_len
-    )
-
-    # Forward pass with autocast
-    with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-        outputs_unc = model_uncompiled(tokens_unc, mask, num_iterations=n_iter, nested_metadata=nested_metadata)
-
-    # Sum one of the outputs for gradient computation
-    # print(outputs_unc)
-    if isinstance(outputs_unc, tuple):
-        loss_unc = outputs_unc[0][0].sum()
-        for i in range(1, n_iter):
-            loss_unc = loss_unc + outputs_unc[0][i].sum()
-    else:
-        loss_unc = outputs_unc[0].sum()
-        for i in range(1, n_iter):
-            loss_unc = loss_unc + outputs_unc[i].sum()
-
-    print(f"Loss (uncompiled): {loss_unc.item():.6f}")
-
-    # Backward pass
-    loss_unc.backward()
-
-    # Extract gradients
-    grads_uncompiled = get_model_gradients(model_uncompiled)
-
-    print(f"Number of parameters with gradients: {len(grads_uncompiled)}")
-
-    # ========================================================================
-    # Compare gradients
-    # ========================================================================
-    gradients_match = compare_gradients(grads_compiled, grads_uncompiled, rtol=1e-3, atol=1e-5)
-
-    if not gradients_match:
-        print("\n⚠️  GRADIENT INSTABILITY DETECTED!")
-        print("The compiled version produces different gradients than the uncompiled version.")
-        print("This confirms the issue with torch.compile + AMP bfloat16.\n")
-    else:
-        print("\n✓ Gradients are stable across compiled and uncompiled versions.\n")
-
-
-if __name__ == "__main__":
-    main()
